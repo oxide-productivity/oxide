@@ -609,6 +609,7 @@ pub async fn start_focus_session(
 
 #[tauri::command]
 pub async fn end_focus_session(
+    app_handle: tauri::AppHandle,
     db_state: State<'_, DbState>,
     monitor_state: State<'_, MonitorState>,
     session_id: String,
@@ -690,6 +691,9 @@ pub async fn end_focus_session(
             .spawn();
     }
 
+    // Notify all windows of updated stats
+    let _ = app_handle.emit("stats-updated", &stats);
+
     Ok(stats)
 }
 
@@ -754,6 +758,267 @@ pub async fn get_active_session(
     } else {
         Ok(None)
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct ExtractedTask {
+    pub title: String,
+    pub project_name: Option<String>,
+    pub priority: String,
+    pub estimated_minutes: Option<i32>,
+}
+
+async fn call_llm_api(api_key: &str, raw_text: &str) -> Result<ExtractedTask, String> {
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
+        api_key
+    );
+
+    let prompt = format!(
+        "You are Oxide Task Parser. Parse the following raw user thought into a JSON object.
+         Response format must be exactly JSON:
+         {{
+           \"title\": \"string, the clean task action title without priority, project name or time keywords\",
+           \"project_name\": \"string or null, the name of the project mentioned\",
+           \"priority\": \"string, either 'high', 'medium' or 'low'\",
+           \"estimated_minutes\": number or null
+         }}
+         Thought to parse: \"{}\"",
+        raw_text
+    );
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("API returned error status: {}", res.status()));
+    }
+
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
+
+    let text = body["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .ok_or_else(|| "Failed to extract text from candidates".to_string())?;
+
+    let parsed: ExtractedTask = serde_json::from_str(text.trim())
+        .map_err(|e| format!("Failed to deserialize ExtractedTask: {}", e))?;
+
+    Ok(parsed)
+}
+
+fn parse_with_regex(raw_text: &str) -> ExtractedTask {
+    let mut title = raw_text.to_string();
+    let mut project_name = None;
+    let mut priority = "medium".to_string();
+    let mut estimated_minutes = None;
+
+    let lower = raw_text.to_lowercase();
+
+    // Priority parsing
+    if lower.contains("ưu tiên cao") || lower.contains("quan trọng") || lower.contains("khẩn cấp") || lower.contains("high") {
+        priority = "high".to_string();
+    } else if lower.contains("ưu tiên thấp") || lower.contains("thấp") || lower.contains("low") {
+        priority = "low".to_string();
+    }
+
+    // Project parsing
+    if let Some(idx) = lower.find("dự án ") {
+        let start = idx + "dự án ".len();
+        let word = raw_text[start..].split_whitespace().next().unwrap_or("");
+        if !word.is_empty() {
+            project_name = Some(word.trim_matches(|c: char| !c.is_alphanumeric()).to_string());
+            title = title.replace(&format!("dự án {}", word), "");
+        }
+    } else if let Some(idx) = lower.find("project ") {
+        let start = idx + "project ".len();
+        let word = raw_text[start..].split_whitespace().next().unwrap_or("");
+        if !word.is_empty() {
+            project_name = Some(word.trim_matches(|c: char| !c.is_alphanumeric()).to_string());
+            title = title.replace(&format!("project {}", word), "");
+        }
+    } else if let Some(idx) = lower.find('#') {
+        let start = idx + 1;
+        let word = raw_text[start..].split_whitespace().next().unwrap_or("");
+        if !word.is_empty() {
+            project_name = Some(word.trim_matches(|c: char| !c.is_alphanumeric()).to_string());
+            title = title.replace(&format!("#{}", word), "");
+        }
+    }
+
+    // Minutes parsing
+    for word in raw_text.split_whitespace() {
+        let only_digits: String = word.chars().filter(|c| c.is_ascii_digit()).collect();
+        if !only_digits.is_empty() {
+            if let Ok(num_str) = only_digits.parse::<i32>() {
+                if word.contains("phút") || word.contains("phut") || word.contains("m") || word.contains("min") {
+                    estimated_minutes = Some(num_str);
+                    title = title.replace(word, "");
+                    break;
+                }
+            }
+        }
+    }
+
+    // Clean up common keywords from title
+    let clean_keywords = vec![
+        "độ ưu tiên cao", "ưu tiên cao", "ưu tiên thấp", "độ ưu tiên thấp",
+        "khẩn cấp", "quan trọng", "high", "low", "medium", "priority"
+    ];
+    for kw in clean_keywords {
+        title = title.replace(kw, "");
+        title = title.replace(&kw.to_uppercase(), "");
+        if kw.len() > 1 {
+            let capitalized = format!("{}{}", &kw[..1].to_uppercase(), &kw[1..]);
+            title = title.replace(&capitalized, "");
+        }
+    }
+
+    title = title.split_whitespace().collect::<Vec<&str>>().join(" ");
+    title = title.trim().to_string();
+
+    ExtractedTask {
+        title,
+        project_name,
+        priority,
+        estimated_minutes,
+    }
+}
+
+#[tauri::command]
+pub async fn parse_brain_dump(
+    app_handle: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    raw_text: String,
+) -> Result<Task, String> {
+    let api_key = std::env::var("OXIDE_AI_API_KEY").ok();
+    
+    let mut extracted = if let Some(key) = api_key {
+        match call_llm_api(&key, &raw_text).await {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                eprintln!("LLM parse failed, falling back to regex: {}", e);
+                parse_with_regex(&raw_text)
+            }
+        }
+    } else {
+        parse_with_regex(&raw_text)
+    };
+
+    if extracted.title.trim().is_empty() {
+        extracted.title = raw_text.clone();
+    }
+
+    let conn = db_state.0.lock().map_err(|e| format!("Failed to lock database: {}", e))?;
+    let mut project_id: Option<String> = None;
+    if let Some(ref proj_name) = extracted.project_name {
+        let mut stmt = conn.prepare("SELECT id FROM projects WHERE name = ?1 AND is_archived = 0 COLLATE NOCASE").map_err(|e| e.to_string())?;
+        if let Ok(id) = stmt.query_row([proj_name], |row| row.get::<_, String>(0)) {
+            project_id = Some(id);
+        } else {
+            let new_proj_id = Ulid::new().to_string();
+            let now = Utc::now().to_rfc3339();
+            let colors = vec!["#4dabf7", "#ff922b", "#51cf66", "#e599f7", "#cc5de8", "#20c997", "#f06595", "#ff6b6b"];
+            let idx = (now.len() % colors.len()) as usize;
+            let color = colors[idx].to_string();
+            
+            let mut pos_stmt = conn.prepare("SELECT COALESCE(MAX(position), 0) FROM projects").map_err(|e| e.to_string())?;
+            let max_pos: i32 = pos_stmt.query_row([], |row| row.get(0)).unwrap_or(0);
+            let position = max_pos + 1;
+
+            if conn.execute(
+                "INSERT INTO projects (id, name, color, icon, position, is_archived, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, 0, ?5, ?6)",
+                (&new_proj_id, proj_name, &color, position, &now, &now)
+            ).is_ok() {
+                project_id = Some(new_proj_id);
+            }
+        }
+    }
+
+    let id = Ulid::new().to_string();
+    let now = Utc::now().to_rfc3339();
+    let priority_val = extracted.priority.to_lowercase();
+    let priority = if vec!["low", "medium", "high"].contains(&priority_val.as_str()) {
+        priority_val
+    } else {
+        "medium".to_string()
+    };
+    let estimated_duration = extracted.estimated_minutes.unwrap_or(0) * 60;
+
+    let mut pos_stmt = conn.prepare("SELECT COALESCE(MAX(position), 0) FROM tasks").map_err(|e| e.to_string())?;
+    let max_pos: i32 = pos_stmt.query_row([], |row| row.get(0)).unwrap_or(0);
+    let position = max_pos + 1;
+
+    conn.execute(
+        "INSERT INTO tasks (id, project_id, parent_id, title, description, status, priority, estimated_duration, actual_duration, position, is_daily_focus, created_at, updated_at)
+         VALUES (?1, ?2, NULL, ?3, NULL, 'todo', ?4, ?5, 0, ?6, 0, ?7, ?8)",
+        (
+            &id,
+            &project_id,
+            &extracted.title,
+            &priority,
+            estimated_duration,
+            position,
+            &now,
+            &now,
+        ),
+    ).map_err(|e| format!("Failed to insert extracted task: {}", e))?;
+
+    // Reward for dumping ideas!
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let _ = conn.execute(
+        "UPDATE user_stats SET experience_points = experience_points + 5 WHERE date = ?",
+        [&today]
+    );
+
+    // Let the main dashboard know to reload and update XP!
+    if let Ok(mut stmt) = conn.prepare("SELECT date, total_focus_seconds, tasks_completed_count, current_streak, experience_points FROM user_stats WHERE date = ?") {
+        if let Ok(stats) = stmt.query_row([&today], |row: &rusqlite::Row| {
+            Ok(UserStats {
+                date: row.get(0)?,
+                total_focus_seconds: row.get(1)?,
+                tasks_completed_count: row.get(2)?,
+                current_streak: row.get(3)?,
+                experience_points: row.get(4)?,
+            })
+        }) {
+            let _ = app_handle.emit("stats-updated", stats);
+        }
+    }
+
+    Ok(Task {
+        id,
+        project_id,
+        parent_id: None,
+        title: extracted.title,
+        description: None,
+        status: "todo".to_string(),
+        priority,
+        estimated_duration,
+        actual_duration: 0,
+        position,
+        is_daily_focus: 0,
+        due_date: None,
+        completed_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+        last_synced_at: None,
+    })
 }
 
 

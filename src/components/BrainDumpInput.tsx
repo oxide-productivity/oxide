@@ -47,6 +47,30 @@ export function BrainDumpInput() {
     };
   }, []);
 
+  const playSound = (type: "woosh" | "beep" | "celebrate") => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (type === "woosh") {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(100, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.3);
+        
+        gain.gain.setValueAtTime(0.01, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+      }
+    } catch (err) {
+      console.error("Audio Context error:", err);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!inputValue.trim()) return;
@@ -54,13 +78,12 @@ export function BrainDumpInput() {
     setStatusMessage("⚡ Đang phân tích...");
 
     try {
-      // In Sprint 1, we save it as a simple task. In Sprint 4, we will hook it to the LLM.
-      await invoke("create_task", {
-        title: inputValue,
-        priority: "medium",
+      await invoke("parse_brain_dump", {
+        rawText: inputValue,
       });
 
-      setStatusMessage("✅ Đã ghi nhận thành công!");
+      playSound("woosh");
+      setStatusMessage("✅ Đã ghi nhận ý tưởng (+5 XP)!");
       setInputValue("");
       
       // Short delay, then hide window
@@ -72,7 +95,7 @@ export function BrainDumpInput() {
         } catch (err) {
           console.error(err);
         }
-      }, 800);
+      }, 1000);
     } catch (err) {
       console.error(err);
       setStatusMessage("❌ Có lỗi xảy ra khi ghi nhận.");

@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -98,6 +98,51 @@ export function MainDashboard() {
     experience_points: 0,
   });
 
+  // Level-up celebration state
+  const [levelUpModalOpen, setLevelUpModalOpen] = useState(false);
+  const [celebrationLevel, setCelebrationLevel] = useState(1);
+  const levelRef = useRef<number | null>(null);
+
+  const playSound = (type: "celebrate" | "beep") => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const now = ctx.currentTime;
+      if (type === "celebrate") {
+        const playNote = (freq: number, start: number, duration: number) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "triangle";
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.01, start);
+          gain.gain.linearRampToValueAtTime(0.3, start + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.01, start + duration);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(start);
+          osc.stop(start + duration);
+        };
+        playNote(261.63, now, 0.15); // C4
+        playNote(329.63, now + 0.15, 0.15); // E4
+        playNote(392.00, now + 0.3, 0.15); // G4
+        playNote(523.25, now + 0.45, 0.4); // C5
+      }
+    } catch (err) {
+      console.error("Audio Context error:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (stats.experience_points !== undefined && stats.experience_points > 0) {
+      const level = Math.floor(stats.experience_points / 100) + 1;
+      if (levelRef.current !== null && level > levelRef.current) {
+        playSound("celebrate");
+        setCelebrationLevel(level);
+        setLevelUpModalOpen(true);
+      }
+      levelRef.current = level;
+    }
+  }, [stats.experience_points]);
+
   // Form & Interaction states
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
@@ -187,6 +232,7 @@ export function MainDashboard() {
     const setupStatsListener = async () => {
       const unlisten = await listen<UserStats>("stats-updated", (event) => {
         setStats(event.payload);
+        loadData();
       });
       return unlisten;
     };
@@ -962,6 +1008,84 @@ export function MainDashboard() {
             </Group>
           </Stack>
         </form>
+      </Modal>
+
+      {/* RPG LEVEL UP CELEBRATION MODAL */}
+      <Modal
+        opened={levelUpModalOpen}
+        onClose={() => setLevelUpModalOpen(false)}
+        withCloseButton={false}
+        centered
+        size="md"
+        radius="lg"
+        overlayProps={{
+          backgroundOpacity: 0.85,
+          blur: 8,
+        }}
+        styles={{
+          content: {
+            background: "linear-gradient(135deg, #15152a 0%, #0e0e18 100%)",
+            border: "2px solid #fab005",
+            padding: "30px",
+            boxShadow: "0 0 30px rgba(250, 176, 5, 0.4)",
+          }
+        }}
+      >
+        <style>{`
+          @keyframes bounce {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(-10px); }
+          }
+        `}</style>
+        <Stack align="center" gap="lg" style={{ textAlign: "center" }}>
+          <div style={{
+            fontSize: "64px",
+            animation: "bounce 0.6s infinite alternate ease-in-out",
+          }}>
+            🏆
+          </div>
+          
+          <Title order={2} style={{ color: "#fab005", fontFamily: "Outfit, sans-serif", fontWeight: 800, letterSpacing: "1px" }}>
+            LEVEL UP!
+          </Title>
+
+          <Text style={{ color: "#ffffff", fontSize: "18px", fontWeight: 600 }}>
+            Chúc mừng bạn đã đạt đến Cấp độ mới!
+          </Text>
+
+          <div style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "100px",
+            height: "100px",
+            borderRadius: "50%",
+            background: "rgba(250, 176, 5, 0.15)",
+            border: "3px solid #fab005",
+            color: "#fab005",
+            fontSize: "36px",
+            fontWeight: 800,
+            margin: "10px 0px",
+            boxShadow: "0 0 15px rgba(250, 176, 5, 0.2)"
+          }}>
+            {celebrationLevel}
+          </div>
+
+          <Text size="sm" style={{ color: "#a0a0c0", maxWidth: "300px" }}>
+            Mỗi level tăng thêm chứng minh sự tập trung sâu vượt bậc và hiệu suất công việc tuyệt vời của bạn! Keep moving forward! ⚡
+          </Text>
+
+          <Button
+            color="yellow"
+            variant="light"
+            size="md"
+            fullWidth
+            onClick={() => setLevelUpModalOpen(false)}
+            style={{ fontWeight: 700 }}
+          >
+            Tiếp tục tập trung!
+          </Button>
+        </Stack>
       </Modal>
 
       {/* Task Settings & Details Drawer */}

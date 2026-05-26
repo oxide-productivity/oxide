@@ -1,4 +1,5 @@
 use tauri::Manager;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Modifiers, Code, ShortcutState};
 
 pub mod database;
 pub mod models;
@@ -8,7 +9,27 @@ pub mod commands;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        if let Some(window) = app.get_webview_window("brain_dump") {
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
+            // Register Ctrl+Shift+Space global shortcut
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+            let _ = app.global_shortcut().register(shortcut);
+
             // Retrieve application data directory
             let app_data_dir = app
                 .path()
@@ -78,7 +99,8 @@ pub fn run() {
             commands::start_focus_session,
             commands::end_focus_session,
             commands::get_user_stats,
-            commands::get_active_session
+            commands::get_active_session,
+            commands::parse_brain_dump
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
