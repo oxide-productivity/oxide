@@ -181,7 +181,7 @@ export function MainDashboard() {
       setProjects(projs);
 
       const tsks: Task[] = await invoke("get_tasks", {
-        project_id: selectedProjectId || undefined,
+        projectId: selectedProjectId || undefined,
       });
       setTasks(tsks);
 
@@ -203,10 +203,10 @@ export function MainDashboard() {
 
   const loadDrawerDetails = async (taskId: string) => {
     try {
-      const tags: Tag[] = await invoke("get_task_tags", { task_id: taskId });
+      const tags: Tag[] = await invoke("get_task_tags", { taskId });
       setTaskTags(tags);
 
-      const links: TaskLink[] = await invoke("get_task_links", { task_id: taskId });
+      const links: TaskLink[] = await invoke("get_task_links", { taskId });
       setTaskLinks(links);
     } catch (err) {
       console.error("Failed to load task drawer details:", err);
@@ -302,10 +302,10 @@ export function MainDashboard() {
     try {
       await invoke("create_task", {
         title: newTaskTitle,
-        project_id: selectedProjectId,
-        parent_id: null,
+        projectId: selectedProjectId,
+        parentId: null,
         priority: newTaskPriority,
-        estimated_duration: 1800, // default 30 mins
+        estimatedDuration: 1800, // default 30 mins
       });
       setNewTaskTitle("");
       loadData();
@@ -321,10 +321,10 @@ export function MainDashboard() {
     try {
       await invoke("create_task", {
         title: newSubtaskTitle,
-        project_id: selectedProjectId,
-        parent_id: activeSubtaskParentId,
+        projectId: selectedProjectId,
+        parentId: activeSubtaskParentId,
         priority: "medium",
-        estimated_duration: 1800,
+        estimatedDuration: 1800,
       });
       setNewSubtaskTitle("");
       setActiveSubtaskParentId(null);
@@ -355,10 +355,10 @@ export function MainDashboard() {
     if (!selectedTask || !newLinkTitle.trim() || !newLinkUrl.trim()) return;
     try {
       await invoke("add_task_link", {
-        task_id: selectedTask.id,
+        taskId: selectedTask.id,
         title: newLinkTitle,
         url: newLinkUrl,
-        auto_open: newLinkAutoOpen,
+        autoOpen: newLinkAutoOpen,
       });
       setNewLinkTitle("");
       setNewLinkUrl("");
@@ -371,7 +371,7 @@ export function MainDashboard() {
   const handleDeleteTaskLink = async (linkId: string) => {
     if (!selectedTask) return;
     try {
-      await invoke("delete_task_link", { link_id: linkId });
+      await invoke("delete_task_link", { linkId });
       loadDrawerDetails(selectedTask.id);
     } catch (err) {
       console.error("Failed to delete task link:", err);
@@ -398,8 +398,8 @@ export function MainDashboard() {
     if (!selectedTask) return;
     try {
       await invoke("assign_tag_to_task", {
-        task_id: selectedTask.id,
-        tag_id: tagId,
+        taskId: selectedTask.id,
+        tagId,
       });
       loadDrawerDetails(selectedTask.id);
     } catch (err) {
@@ -411,8 +411,8 @@ export function MainDashboard() {
     if (!selectedTask) return;
     try {
       await invoke("remove_tag_from_task", {
-        task_id: selectedTask.id,
-        tag_id: tagId,
+        taskId: selectedTask.id,
+        tagId,
       });
       loadDrawerDetails(selectedTask.id);
     } catch (err) {
@@ -432,12 +432,12 @@ export function MainDashboard() {
     try {
       // 1. Start the SQLite Focus Session and active-window distraction tracking in background
       await invoke("start_focus_session", {
-        task_id: task.id,
-        session_type: "focus",
+        taskId: task.id,
+        sessionType: "focus",
       });
 
       // 2. Run Blitz Trigger to launch auto-open links in background natively via Rust
-      await invoke("execute_blitz_trigger", { task_id: task.id });
+      await invoke("execute_blitz_trigger", { taskId: task.id });
 
       // 3. Open / Show the borderless Blitz Timer window
       const timerWindow = await WebviewWindow.getByLabel("timer");

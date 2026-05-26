@@ -23,7 +23,7 @@ export function BlitzTimer() {
   // Keep track of total elapsed seconds during this active session
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  // 1. Fetch active session when component mounts
+  // 1. Fetch active session when component mounts & listen to session-started events
   useEffect(() => {
     const fetchActiveSession = async () => {
       try {
@@ -33,12 +33,31 @@ export function BlitzTimer() {
           setSessionType(active.session_type === "focus" ? "focus" : "break");
           setTimeLeft(active.session_type === "focus" ? 1500 : 300);
           setIsRunning(true);
+          setElapsedSeconds(0);
         }
       } catch (err) {
         console.error("Failed to load active Pomodoro session:", err);
       }
     };
+
     fetchActiveSession();
+
+    // Listen to session-started events emitted from the background
+    const setupListener = async () => {
+      const unlisten = await listen<string>("session-started", () => {
+        fetchActiveSession();
+      });
+      return unlisten;
+    };
+
+    let unsub: any;
+    setupListener().then((fn) => {
+      unsub = fn;
+    });
+
+    return () => {
+      if (unsub) unsub();
+    };
   }, []);
 
   // 2. Listen to background distraction events from Rust (xdotool watcher)

@@ -523,6 +523,9 @@ pub async fn start_focus_session(
     monitor_state.is_active.store(true, Ordering::Relaxed);
     *monitor_state.active_session_id.lock().unwrap() = Some(session_id.clone());
 
+    // Emit event to notify all webview windows (especially the timer window) that a session has started
+    let _ = app_handle.emit("session-started", &session_id);
+
     // 4. Start background window watcher thread
     let is_active_clone = monitor_state.is_active.clone();
     let active_session_clone = monitor_state.active_session_id.clone();
