@@ -12,9 +12,32 @@
   "app": {
     "windows": [
       {
-        "title": "oxide",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Oxide Workspace",
+        "width": 1200,
+        "height": 800,
+        "resizable": true
+      },
+      {
+        "label": "timer",
+        "title": "Blitz Timer",
+        "width": 240,
+        "height": 90,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false
+      },
+      {
+        "label": "brain_dump",
+        "title": "Brain Dump",
+        "width": 600,
+        "height": 80,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
